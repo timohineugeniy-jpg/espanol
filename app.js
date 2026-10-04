@@ -135,10 +135,14 @@ function checkTyped(input, answer) {
 
 let esVoice = null;
 const hasTTS = 'speechSynthesis' in window;
+const esVoices = () => hasTTS ? speechSynthesis.getVoices().filter(v => v.lang.replace('_', '-').startsWith('es')) : [];
+// Базовые голоса iOS звучат роботом; улучшенные/премиум, если скачаны, берём первыми.
+const voiceScore = v => (/premium|enhanced|улучш|высок|neural/i.test(v.name + v.voiceURI) ? 4 : 0)
+  + (/es-ES/i.test(v.lang.replace('_', '-')) ? 2 : 0) + (/compact|eloquence/i.test(v.voiceURI) ? -3 : 0);
 function pickVoice() {
-  if (!hasTTS) return;
-  const vs = speechSynthesis.getVoices();
-  esVoice = vs.find(v => v.lang === 'es-ES') || vs.find(v => v.lang.startsWith('es')) || null;
+  const vs = esVoices();
+  esVoice = vs.find(v => v.voiceURI === S.voiceURI)
+    || vs.slice().sort((a, b) => voiceScore(b) - voiceScore(a))[0] || null;
 }
 if (hasTTS) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
 function speak(text) {
@@ -517,7 +521,9 @@ function renderSettings() {
     <div class="card">
       <label class="row"><span style="flex:1">Озвучивать правильные ответы</span>
         <input type="checkbox" id="voice" ${S.voice ? 'checked' : ''} style="width:24px;height:24px"></label>
-      <p class="small muted">${hasTTS ? (esVoice ? `Голос: ${esc(esVoice.name)}` : 'Испанский голос не найден — добавь его в Настройках iPhone → Универсальный доступ → Устный контент → Голоса.') : 'Озвучка в этом браузере недоступна.'}</p>
+      ${esVoices().length ? `<p class="small muted" style="margin-top:12px">Голос</p>
+      <select class="input" id="voicesel">${esVoices().map(v => `<option value="${esc(v.voiceURI)}" ${esVoice && v.voiceURI === esVoice.voiceURI ? 'selected' : ''}>${esc(v.name)} · ${esc(v.lang)}</option>`).join('')}</select>` : ''}
+      <p class="small muted">${hasTTS ? 'Голоса получше скачиваются в iPhone: Настройки → Универсальный доступ → Устный контент → Голоса → Español → выбери голос и скачай версию «Улучшенный» или «Премиум». Потом перезапусти приложение и выбери его здесь.' : 'Озвучка в этом браузере недоступна.'}</p>
       <button class="btn ghost" id="test">🔊 Проверить голос</button>
     </div>
     <h2>Резервная копия</h2>
@@ -532,7 +538,9 @@ function renderSettings() {
     <p class="small muted" style="margin-top:20px">Тем: ${TOPICS.length} · элементов: ${ALL.length}</p>`);
   document.getElementById('back').onclick = renderHome;
   document.getElementById('voice').onchange = e => { S.voice = e.target.checked; save(); };
-  document.getElementById('test').onclick = () => speak('Hola, ¿qué tal? Vamos a repasar español.');
+  const vsel = document.getElementById('voicesel');
+  if (vsel) vsel.onchange = () => { S.voiceURI = vsel.value; save(); pickVoice(); speak('Hola, ¿qué tal?'); };
+  document.getElementById('test').onclick =() => speak('Hola, ¿qué tal? Vamos a repasar español.');
   document.getElementById('export').onclick = async () => {
     const code = btoa(unescape(encodeURIComponent(JSON.stringify(S))));
     document.getElementById('data').value = code;
