@@ -15,6 +15,22 @@ const LESSON_SIZE = 12;
 
 const lines = s => (s || '').split('\n').map(x => x.trim()).filter(Boolean);
 
+// Глаголы, среди которых ищем, чьей формой является пропуск, если он не подписан в данных.
+const VERBS = [...new Set([...Object.keys(CONJ.IRR), ...('hablar comer vivir trabajar cenar terminar estudiar viajar comprar fumar ' +
+  'llegar abrir esperar cocinar gustar visitar ayudar desayunar aprender llamar aceptar escapar deber beber llevar ' +
+  'jugar empezar llover volver escribir leer romper morir cerrar').split(' ')])];
+function isFormOf(inf, form) {
+  const t = CONJ.table(inf);
+  if (!t) return false;
+  const f = form.toLowerCase();
+  return CONJ.find(inf, f).length > 0 || t.part === f || t.ger === f || t.inf === f;
+}
+function lemmaOf(form, hint) {
+  if (hint && isFormOf(hint, form)) return hint;
+  if (hint) return null; // подсказка есть, но это не её форма (le + lo, perro → perrito)
+  return VERBS.find(v => isFormOf(v, form)) || null;
+}
+
 function buildItems(t) {
   const items = [];
   lines(t.words).forEach(l => {
@@ -27,15 +43,21 @@ function buildItems(t) {
     l.slice(i + 1).split(',').map(s => s.trim()).forEach((f, k) => items.push({
       key: `${t.id}|c|${verb}|${c.t}|${k}`, type: 'form',
       prompt: verb, label: `${c.t} · ${PERSONS[k]}`, answer: f, group: verb + c.t,
+      lemma: lemmaOf(f, verb.split(' / ')[0]),
     }));
   }));
   (t.drills || []).forEach(d => lines(d.v).forEach(l => {
     const [p, a] = l.split('|');
-    items.push({ key: `${t.id}|d|${d.t}|${p}`, type: 'form', prompt: p, label: d.t, answer: a, group: d.t });
+    items.push({ key: `${t.id}|d|${d.t}|${p}`, type: 'form', prompt: p, label: d.t, answer: a, group: d.t,
+      lemma: lemmaOf(a, p) });
   }));
   lines(t.sents).forEach(l => {
-    const [text, ua] = l.split('|');
-    items.push({ key: `${t.id}|s|${text}`, type: 'sent', text, ua });
+    // «[fui=ir]» — пропуск и его глагол; в ключ прогресса глагол не входит, чтобы старый прогресс не пропал
+    const [raw, ua] = l.split('|');
+    const [gap, lemma] = raw.match(/\[(.+?)\]/)[1].split('=');
+    const text = raw.replace(/\[(.+?)\]/, `[${gap}]`);
+    items.push({ key: `${t.id}|s|${text}`, type: 'sent', text, ua, gap,
+      lemma: lemma || (t.gapPool ? null : lemmaOf(gap)) });
   });
   (t.quiz || []).forEach(q => items.push({ key: `${t.id}|q|${q.q}`, type: 'quiz', q: q.q, o: q.o, e: q.e }));
   items.forEach(it => { it.topic = t; });
@@ -47,6 +69,31 @@ TOPICS.forEach(t => { t.items = buildItems(t); });
 const TOPIC = Object.fromEntries(TOPICS.map(t => [t.id, t]));
 const ALL = TOPICS.flatMap(t => t.items);
 const ALL_WORDS = ALL.filter(i => i.type === 'word');
+
+const SECTIONS = [
+  { id: 's_past', group: 'grammar', title: 'Настоящее и прошедшие времена', topics: ['g_presente', 'g_perfecto', 'g_indefinido', 'g_imperfecto', 'g_plusc'] },
+  { id: 's_fut', group: 'grammar', title: 'Будущее и условное', topics: ['g_futuro', 'g_futperf', 'g_cond'] },
+  { id: 's_subj', group: 'grammar', title: 'Subjuntivo', topics: ['g_subj', 'g_impsubj'] },
+  { id: 's_mix', group: 'grammar', title: 'Все времена вместе', topics: ['g_tiempos', 'g_progr'] },
+  { id: 's_syntax', group: 'grammar', title: 'Служебные слова', topics: ['g_pron', 'g_prep', 'g_art'] },
+  { id: 's_form', group: 'grammar', title: 'Словообразование', topics: ['g_dim', 'g_pref'] },
+  { id: 's_daily', group: 'vocab', title: 'Повседневная жизнь', topics: ['v_day', 'v_home', 'v_food', 'v_body', 'v_jobs'] },
+  { id: 's_city', group: 'vocab', title: 'Город и путешествия', topics: ['v_travel', 'v_street'] },
+  { id: 's_nature', group: 'vocab', title: 'Природа', topics: ['v_plants', 'v_animals', 'v_nature'] },
+  { id: 's_abstract', group: 'vocab', title: 'Выражения и абстрактная лексика', topics: ['v_expr', 'v_edu', 'v_b2', 'v_syn'] },
+];
+// новые темы, которые забыл разложить по разделам, не пропадают
+const placed = new Set(SECTIONS.flatMap(s => s.topics));
+['grammar', 'vocab'].forEach(g => {
+  const rest = TOPICS.filter(t => t.group === g && !placed.has(t.id)).map(t => t.id);
+  if (rest.length) SECTIONS.push({ id: 's_other_' + g, group: g, title: 'Другое', topics: rest });
+});
+const TENSE_TOPICS = [...SECTIONS[0].topics, ...SECTIONS[1].topics, ...SECTIONS[2].topics, ...SECTIONS[3].topics];
+const EXAMS = [
+  { icon: '⏳', title: 'Все времена', sub: 'формы и фразы', n: 25, topics: () => TENSE_TOPICS },
+  { icon: '📘', title: 'Вся грамматика', sub: 'все разделы', n: 30, topics: () => TOPICS.filter(t => t.group === 'grammar').map(t => t.id) },
+  { icon: '🔤', title: 'Все слова', sub: 'весь словарь', n: 30, topics: () => TOPICS.filter(t => t.group === 'vocab').map(t => t.id) },
+];
 
 // ---------- прогресс ----------
 
@@ -172,9 +219,19 @@ function wordMC(it, dir) {
     options: shuffle([it.es, ...pickDistractors(it.es, pool.map(i => i.es))]) };
 }
 
-function makeExercise(it) {
+const capLike = (model, s) => /^[A-ZÁÉÍÓÚÑ¿¡]/.test(model) ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+
+// Неверные варианты для формы глагола: только тот же глагол в других временах/лицах.
+// Раньше подсовывались другие глаголы, и ответ узнавался по корню без знания времени.
+function formOptions(answer, lemma, fallback) {
+  let ds = lemma ? CONJ.distractors(lemma, answer) : [];
+  if (ds.length < 3) ds = uniq([...ds, ...pickDistractors(answer, fallback.filter(x => !ds.includes(x)))]).slice(0, 3);
+  return shuffle([answer, ...ds.map(d => capLike(answer, d))]);
+}
+
+function makeExercise(it, exam = false) {
   const s = st(it);
-  const b = s ? s.b : 0;
+  const b = exam ? 2 + (Math.random() < .5 ? 0 : -2) : (s ? s.b : 0); // в тесте — вперемешку выбор и ввод
   const r = Math.random();
 
   if (it.type === 'quiz') {
@@ -183,9 +240,9 @@ function makeExercise(it) {
   }
 
   if (it.type === 'word') {
-    if (b === 0) return wordMC(it, 'es2ua');
+    if (b === 0) return wordMC(it, exam && r < .5 ? 'ua2es' : 'es2ua');
     if (b === 1) return wordMC(it, r < .5 ? 'ua2es' : 'es2ua');
-    if (hasTTS && r < .25) return { kind: 'listen', item: it, label: 'Напиши, что услышал', answer: it.es, after: it.ua, speakPrompt: it.es };
+    if (hasTTS && r < .25 && !exam) return { kind: 'listen', item: it, label: 'Напиши, что услышал', answer: it.es, after: it.ua, speakPrompt: it.es };
     if (r < .8) return { kind: 'type', item: it, label: 'Переведи на испанский', prompt: it.ua, answer: it.es, speakAnswer: it.es };
     return wordMC(it, 'ua2es');
   }
@@ -193,24 +250,28 @@ function makeExercise(it) {
   if (it.type === 'form') {
     if (b <= 1) {
       const same = it.topic.items.filter(i => i.type === 'form');
-      let ds = pickDistractors(it.answer, same.filter(i => i.group === it.group).map(i => i.answer));
-      if (ds.length < 3) ds = uniq([...ds, ...pickDistractors(it.answer, same.map(i => i.answer))]).slice(0, 3);
+      const fallback = [...same.filter(i => i.group === it.group), ...same].map(i => i.answer);
       return { kind: 'mc', item: it, label: it.label, prompt: it.prompt, answer: it.answer, speakAnswer: it.answer,
-        options: shuffle([it.answer, ...ds]) };
+        options: formOptions(it.answer, it.lemma, fallback) };
     }
     return { kind: 'type', item: it, label: it.label, prompt: it.prompt, answer: it.answer, speakAnswer: it.answer };
   }
 
   // фраза с пропуском
-  const gap = it.text.match(/\[(.+?)\]/)[1];
+  const gap = it.gap;
   const full = it.text.replace(/[[\]]/g, '');
-  const shown = esc(it.text.replace(/\[.+?\]/, '§')).replace('§', '<span class="gap">&nbsp;</span>');
+  const lemma = it.lemma ? ` <span class="lemma">(${esc(it.lemma)})</span>` : '';
+  const shown = esc(it.text.replace(/\[.+?\]/, '§')).replace('§', `<span class="gap">&nbsp;</span>${lemma}`);
   const order = { kind: 'order', item: it, label: 'Собери фразу', prompt: it.ua, answer: full, speakAnswer: full,
     tiles: shuffle(full.split(' ')) };
-  const gaps = it.topic.items.filter(i => i.type === 'sent').map(i => i.text.match(/\[(.+?)\]/)[1]);
+  const gaps = it.topic.items.filter(i => i.type === 'sent').map(i => i.gap);
+  const options = it.topic.gapPool
+    ? shuffle([gap, ...pickDistractors(gap, it.topic.gapPool).map(d => capLike(gap, d))])
+    : formOptions(gap, it.lemma, gaps);
   const clozeMC = { kind: 'mc', item: it, label: 'Вставь пропущенное', promptHTML: shown, hint: it.ua, answer: gap,
-    speakAnswer: full, options: shuffle([gap, ...pickDistractors(gap, gaps)]) };
+    speakAnswer: full, options };
   const clozeType = { kind: 'type', item: it, label: 'Впиши пропущенное', promptHTML: shown, hint: it.ua, answer: gap, speakAnswer: full };
+  if (exam) return b <= 1 ? clozeMC : clozeType;
   if (b === 0) return r < .5 ? order : clozeMC;
   if (b === 1) return r < .5 ? clozeMC : order;
   return r < .6 ? clozeType : order;
@@ -245,16 +306,27 @@ function reviewSession() {
 
 let L = null; // текущий урок
 
-function startLesson(items, title, back) {
+function startLesson(items, title, back, exam = false) {
   if (!items.length) return;
   L = { queue: items.slice(), total: items.length, done: 0, right: 0, first: new Set(), retried: new Set(),
-        title, back, ex: null, answered: false, startedXp: S.xp };
+        title, back, ex: null, answered: false, startedXp: S.xp, exam, byTopic: {}, missed: [] };
   nextExercise();
+}
+
+// Тест: поровну из каждой выбранной темы, без повторов после ошибок, в конце — разбор по темам.
+function examItems(topicIds, n) {
+  const pools = shuffle(topicIds.map(id => shuffle(TOPIC[id].items.slice())).filter(p => p.length));
+  const out = [];
+  while (out.length < n && pools.some(p => p.length)) pools.forEach(p => { if (p.length && out.length < n) out.push(p.pop()); });
+  return shuffle(out);
+}
+function startExam(topicIds, title, back, n = 20) {
+  startLesson(examItems(topicIds, n), title, back, true);
 }
 
 function nextExercise() {
   if (!L.queue.length) return renderResult();
-  L.ex = makeExercise(L.queue[0]);
+  L.ex = makeExercise(L.queue[0], L.exam);
   L.answered = false;
   L.sel = null;
   L.built = [];
@@ -279,7 +351,10 @@ function grade(ok, note) {
 
   L.queue.shift();
   L.done++;
-  if (!ok && !L.retried.has(it.key)) { L.retried.add(it.key); L.queue.push(it); L.total++; }
+  const bt = L.byTopic[it.topic.id] || (L.byTopic[it.topic.id] = { right: 0, total: 0 });
+  bt.total++; if (ok) bt.right++;
+  if (!ok && !L.missed.includes(it)) L.missed.push(it);
+  if (!ok && !L.exam && !L.retried.has(it.key)) { L.retried.add(it.key); L.queue.push(it); L.total++; }
   L.answered = true;
   if (ok && S.voice && L.ex.speakAnswer) speak(L.ex.speakAnswer);
   showFeedback(ok, note);
@@ -343,16 +418,62 @@ function renderHome() {
         <span><b>Мои ошибки</b><span class="muted small">${mist ? `Слабых мест: ${mist}` : 'Пока ошибок нет'}</span></span>
       </button>
     </div>
-    <h2>Грамматика</h2>
-    ${TOPICS.filter(t => t.group === 'grammar').map(topicRow).join('')}
-    <h2>Слова</h2>
-    ${TOPICS.filter(t => t.group === 'vocab').map(topicRow).join('')}
+    <h2>Проверка знаний</h2>
+    <div class="exam-grid">
+      ${EXAMS.map((e, i) => `<button class="card exam" data-exam="${i}"><span class="big">${e.icon}</span><b>${e.title}</b><span class="small muted">${e.sub}</span></button>`).join('')}
+      <button class="card exam" id="custom"><span class="big">🛠️</span><b>Свой тест</b><span class="small muted">выбери темы</span></button>
+    </div>
+    ${['grammar', 'vocab'].map(g => `<h2 class="group-title">${g === 'grammar' ? 'Грамматика' : 'Слова'}</h2>
+      ${SECTIONS.filter(s => s.group === g).map(sectionBlock).join('')}`).join('')}
   `);
   document.getElementById('review').onclick = () => startLesson(reviewSession(), 'Повторение', renderHome);
   document.getElementById('mistakes').onclick = () => startLesson(shuffle(mistakeItems().slice(0, LESSON_SIZE)), 'Ошибки', renderHome);
   document.getElementById('settings').onclick = renderSettings;
+  document.getElementById('custom').onclick = renderCustom;
+  $app.querySelectorAll('[data-exam]').forEach(b => b.onclick = () => {
+    const e = EXAMS[+b.dataset.exam];
+    startExam(e.topics(), e.title, renderHome, e.n);
+  });
+  $app.querySelectorAll('[data-sectest]').forEach(b => b.onclick = () => {
+    const s = SECTIONS.find(x => x.id === b.dataset.sectest);
+    startExam(s.topics, `Тест: ${s.title}`, renderHome, 20);
+  });
   $app.querySelectorAll('[data-topic]').forEach(b => b.onclick = () => renderTopic(b.dataset.topic));
 }
+
+function sectionBlock(s) {
+  const items = s.topics.flatMap(id => TOPIC[id].items);
+  const p = mastery(items);
+  return `<div class="section-head"><span class="section-title">${esc(s.title)}</span><span class="pct">${p}%</span>
+      <button class="chip-btn" data-sectest="${s.id}">Тест</button></div>
+    ${s.topics.map(id => topicRow(TOPIC[id])).join('')}`;
+}
+
+let customSel = new Set();
+let customN = 20;
+function renderCustom() {
+  render(`
+    <div class="top"><button class="icon-btn" id="back">←</button><h1 style="font-size:22px">Свой тест</h1></div>
+    <p class="small muted">Отметь темы — вопросы возьмутся поровну из каждой.</p>
+    ${SECTIONS.map(s => `<div class="section-head"><label class="row" style="flex:1">
+        <input type="checkbox" class="cb" data-sec="${s.id}" ${s.topics.every(id => customSel.has(id)) ? 'checked' : ''}>
+        <span class="section-title">${esc(s.title)}</span></label></div>
+      <div class="card" style="padding:4px 14px;margin-bottom:6px">${s.topics.map(id => `<label class="list-item">
+        <input type="checkbox" class="cb" data-t="${id}" ${customSel.has(id) ? 'checked' : ''}>
+        <span style="flex:1">${TOPIC[id].icon} ${esc(TOPIC[id].title)}</span></label>`).join('')}</div>`).join('')}
+    <h2>Сколько вопросов</h2>
+    <div class="row">${[15, 25, 40].map(n => `<button class="chip-btn big ${customN === n ? 'on' : ''}" data-n="${n}">${n}</button>`).join('')}</div>
+    <button class="btn" id="go" ${customSel.size ? '' : 'disabled'}>Начать тест${customSel.size ? ` (${customSel.size})` : ''}</button>`);
+  document.getElementById('back').onclick = renderHome;
+  $app.querySelectorAll('[data-t]').forEach(c => c.onchange = () => { c.checked ? customSel.add(c.dataset.t) : customSel.delete(c.dataset.t); keepScroll(renderCustom); });
+  $app.querySelectorAll('[data-sec]').forEach(c => c.onchange = () => {
+    SECTIONS.find(s => s.id === c.dataset.sec).topics.forEach(id => c.checked ? customSel.add(id) : customSel.delete(id));
+    keepScroll(renderCustom);
+  });
+  $app.querySelectorAll('[data-n]').forEach(b => b.onclick = () => { customN = +b.dataset.n; keepScroll(renderCustom); });
+  document.getElementById('go').onclick = () => startExam([...customSel], 'Свой тест', renderCustom, customN);
+}
+function keepScroll(fn) { const y = window.scrollY; fn(); window.scrollTo(0, y); }
 
 function renderTopic(id) {
   const t = TOPIC[id];
@@ -503,16 +624,27 @@ function renderResult() {
   const back = L.back;
   render(`<div class="result">
     <div class="emoji">${emoji}</div>
-    <h1>${acc >= 70 ? 'Урок пройден!' : 'Есть над чем поработать'}</h1>
+    <h1>${L.exam ? `Результат: ${L.right} из ${L.done}` : acc >= 70 ? 'Урок пройден!' : 'Есть над чем поработать'}</h1>
     <p class="muted">${esc(L.title)}</p>
     <div class="stats3" style="margin:22px 0">
       <div><b>${acc}%</b><span>точность</span></div>
       <div><b>+${xp}</b><span>XP</span></div>
       <div><b>🔥 ${streak()}</b><span>дней подряд</span></div>
-    </div>
-    <button class="btn" id="cont">Продолжить</button></div>`);
+    </div></div>
+    ${L.exam && Object.keys(L.byTopic).length > 1 ? `<h2>По темам</h2><div class="card">${Object.entries(L.byTopic)
+      .sort((a, b) => a[1].right / a[1].total - b[1].right / b[1].total)
+      .map(([id, v]) => { const p = Math.round(v.right / v.total * 100); return `<button class="list-item" data-topic="${id}" style="width:100%;text-align:left">
+        <span style="flex:1">${TOPIC[id].icon} ${esc(TOPIC[id].title)}<div class="bar"><i style="width:${p}%;${p < 60 ? 'background:var(--bad)' : ''}"></i></div></span>
+        <b>${v.right}/${v.total}</b></button>`; }).join('')}</div>
+      <p class="small muted">Нажми на тему, чтобы её подтянуть.</p>` : ''}
+    ${L.exam && L.missed.length ? `<button class="btn" id="fix">Разобрать ошибки (${L.missed.length})</button>` : ''}
+    <button class="btn ${L.exam && L.missed.length ? 'ghost' : ''}" id="cont">Продолжить</button>`);
+  // тест только меряет; ошибки закрепляем сразу обычным уроком — там неверное возвращается до правильного ответа
+  const missed = L.exam ? L.missed.slice() : [];
   L = null;
   document.getElementById('cont').onclick = back;
+  if (missed.length) document.getElementById('fix').onclick = () => startLesson(shuffle(missed), 'Разбор ошибок', back);
+  $app.querySelectorAll('[data-topic]').forEach(b => b.onclick = () => renderTopic(b.dataset.topic));
 }
 
 function renderSettings() {
